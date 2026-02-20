@@ -17,12 +17,14 @@ allowFlip   = input.bool(true,  "Разрешить переворот пози�
 // НАСТРОЙКИ ИНДИКАТОРОВ
 // ═══════════════════════════════════════════════════════════════════════════
 
-rsiPeriod      = input.int(14,  "Период RSI",                         minval=1)
-vfiLength      = input.int(130, "Длина VFI",                          minval=1)
-vfiCoef        = input.float(0.2, "Коэффициент VFI")
-vfiVcoef       = input.float(2.5, "Макс. объём VFI")
+rsiPeriod      = 14
+vfiLength      = 130
+vfiCoef        = 0.2
+vfiVcoef       = 2.5
 minRedCandles  = input.int(3,   "Мин. красных свечей перед покупкой (Лонг) / зелёных перед продажей (Шорт)", minval=1)
 sellWindowBars = input.int(3,   "Окно продажи RSI/VFI (свечей назад)", minval=0)
+signalWindowLong  = input.int(5, "Окно поиска сигнала при выходе из Лонга",  minval=1, group="Настройки индикаторов")
+signalWindowShort = input.int(5, "Окно поиска сигнала при выходе из Шорта", minval=1, group="Настройки индикаторов")
 
 showTable  = input.bool(true, "Показывать таблицу",  group="Отображение")
 showLabels = input.bool(true, "Показывать метки",     group="Отображение")
@@ -895,6 +897,63 @@ checkRange(startBar, endBar, indicator, op, thresh) =>
                 break
     result
 
+findFirstBar(startBar, endBar, indicator, op, thresh) =>
+    result = -1
+    if bar_index >= endBar
+        for i = startBar to endBar
+            if compare(indicator[i], op, thresh)
+                result := i
+                break
+    result
+
+// Каскадный поиск: для каждого условия ищем от бара предыдущего ±window
+// Возвращает [found, lastBar] — найдено ли, и бар последнего условия
+cascadeSearch2(startRange, endRange, ind1, op1, thr1, ind2, op2, thr2, window) =>
+    found = false
+    lastBar = -1
+    bar1 = -1
+    if bar_index >= endRange
+        for i = startRange to endRange
+            if compare(ind1[i], op1, thr1)
+                bar1 := i
+                break
+    if bar1 >= 0
+        s2 = math.max(0, bar1 - window)
+        e2 = bar1 + window
+        for i = s2 to e2
+            if compare(ind2[i], op2, thr2)
+                lastBar := i
+                found := true
+                break
+    [found, lastBar]
+
+cascadeSearch3(startRange, endRange, ind1, op1, thr1, ind2, op2, thr2, ind3, op3, thr3, window) =>
+    found = false
+    lastBar = -1
+    bar1 = -1
+    if bar_index >= endRange
+        for i = startRange to endRange
+            if compare(ind1[i], op1, thr1)
+                bar1 := i
+                break
+    if bar1 >= 0
+        bar2 = -1
+        s2 = math.max(0, bar1 - window)
+        e2 = bar1 + window
+        for i = s2 to e2
+            if compare(ind2[i], op2, thr2)
+                bar2 := i
+                break
+        if bar2 >= 0
+            s3 = math.max(0, bar2 - window)
+            e3 = bar2 + window
+            for i = s3 to e3
+                if compare(ind3[i], op3, thr3)
+                    lastBar := i
+                    found := true
+                    break
+    [found, lastBar]
+
 // ═══════════════════════════════════════════════════════════════════════════
 // УНИВЕРСАЛЬНЫЙ ДЕТЕКТОР ПИВОТ-ПАТТЕРНОВ (поддерживает все 16 комбинаций)
 // ═══════════════════════════════════════════════════════════════════════════
@@ -953,7 +1012,7 @@ findSinglePivotPair(firstType, secondType, windowBack, windowFwd, signalBar) =>
                         found := true
                         break
     
-    found
+    [found, secondFoundBar]
 
 // Детектор паттернов с множественными вариантами (логика AND)
 // Возвращает true только если ВСЕ включённые варианты найдены
@@ -971,41 +1030,50 @@ pivotMultiPatternDetector(useA, firstA, secondA, useB, firstB, secondB, useC, fi
     
     // Если ни один вариант не включён - фильтр отключён (пропускает всё)
     if enabledVariantCount == 0
-        [true, "Фильтр отключен"]
+        [true, "Фильтр отключен", -1]
     else
         // Проверяем каждый включённый вариант
         foundVariantCount = 0
         patternSummary = ""
+        maxPivotBar = -1
         
         if useA
-            foundA = findSinglePivotPair(firstA, secondA, windowBack, windowFwd, signalBar)
+            [foundA, secondBarA] = findSinglePivotPair(firstA, secondA, windowBack, windowFwd, signalBar)
             if foundA
                 foundVariantCount := foundVariantCount + 1
                 patternSummary := patternSummary + "A:" + firstA + "→" + secondA + " "
+                if secondBarA > maxPivotBar
+                    maxPivotBar := secondBarA
         
         if useB
-            foundB = findSinglePivotPair(firstB, secondB, windowBack, windowFwd, signalBar)
+            [foundB, secondBarB] = findSinglePivotPair(firstB, secondB, windowBack, windowFwd, signalBar)
             if foundB
                 foundVariantCount := foundVariantCount + 1
                 patternSummary := patternSummary + "B:" + firstB + "→" + secondB + " "
+                if secondBarB > maxPivotBar
+                    maxPivotBar := secondBarB
         
         if useC
-            foundC = findSinglePivotPair(firstC, secondC, windowBack, windowFwd, signalBar)
+            [foundC, secondBarC] = findSinglePivotPair(firstC, secondC, windowBack, windowFwd, signalBar)
             if foundC
                 foundVariantCount := foundVariantCount + 1
                 patternSummary := patternSummary + "C:" + firstC + "→" + secondC + " "
+                if secondBarC > maxPivotBar
+                    maxPivotBar := secondBarC
         
         if useD
-            foundD = findSinglePivotPair(firstD, secondD, windowBack, windowFwd, signalBar)
+            [foundD, secondBarD] = findSinglePivotPair(firstD, secondD, windowBack, windowFwd, signalBar)
             if foundD
                 foundVariantCount := foundVariantCount + 1
                 patternSummary := patternSummary + "D:" + firstD + "→" + secondD + " "
+                if secondBarD > maxPivotBar
+                    maxPivotBar := secondBarD
         
         // Все включённые варианты должны быть найдены (AND logic)
         allFound = (foundVariantCount == enabledVariantCount)
         finalExpl = allFound ? patternSummary : "Не все варианты найдены"
         
-        [allFound, finalExpl]
+        [allFound, finalExpl, maxPivotBar]
 
 // ═══════════════════════════════════════════════════════════════════════════
 // СВЕЧНОЙ ПАТТЕРН
@@ -1180,7 +1248,7 @@ if lBuySignal and not lBuyBlocked and strategy.equity > 0
     anyVariantEnabled = usePivotLongEntryA or usePivotLongEntryB or usePivotLongEntryC or usePivotLongEntryD
     if anyVariantEnabled
         searchFrom = na(lEntryBar) ? bar_index - 50 : lEntryBar  // Fallback для первого входа
-        [pivotFound, pivotExpl] = pivotMultiPatternDetector(
+        [pivotFound, pivotExpl, _lEntryMaxPivot] = pivotMultiPatternDetector(
              usePivotLongEntryA, pivotLongEntryAFirst, pivotLongEntryASecond,
              usePivotLongEntryB, pivotLongEntryBFirst, pivotLongEntryBSecond,
              usePivotLongEntryC, pivotLongEntryCFirst, pivotLongEntryCSecond,
@@ -1265,134 +1333,160 @@ lCurSellRsn = ""
 // ← ЗАЩИТА: проверяем bar_index > lEntryBar — запрещаем продажу в баре входа
 if longIsOpen and lPhase == 0 and not lStopActive and (na(lEntryBar) or bar_index > lEntryBar)
     if not lSellMet and enableLS1
-        if checkRange(0, sellWindowBars, rsi, ls1RsiOp, ls1RsiVal) and checkRange(0, sellWindowBars, vfi, ls1VfiOp, ls1VfiVal)
+        [ls1ok, ls1bar] = cascadeSearch2(0, sellWindowBars, rsi, ls1RsiOp, ls1RsiVal, vfi, ls1VfiOp, ls1VfiVal, signalWindowLong)
+        if ls1ok
             lSellMet := true
-            lSignalBar := bar_index
+            lSignalBar := bar_index - ls1bar
             lCurSellRsn := "LS1: RSI" + ls1RsiOp + str.tostring(ls1RsiVal) + " VFI" + ls1VfiOp + str.tostring(ls1VfiVal)
     if not lSellMet and enableLS2
-        if checkRange(0, sellWindowBars, rsi, ls2RsiOp, ls2RsiVal) and checkRange(0, sellWindowBars, vfi, ls2VfiOp, ls2VfiVal)
+        [ls2ok, ls2bar] = cascadeSearch2(0, sellWindowBars, rsi, ls2RsiOp, ls2RsiVal, vfi, ls2VfiOp, ls2VfiVal, signalWindowLong)
+        if ls2ok
             lSellMet := true
-            lSignalBar := bar_index
+            lSignalBar := bar_index - ls2bar
             lCurSellRsn := "LS2: RSI" + ls2RsiOp + str.tostring(ls2RsiVal) + " VFI" + ls2VfiOp + str.tostring(ls2VfiVal)
     if not lSellMet and enableLS3
-        if checkRange(0, sellWindowBars, rsi, ls3RsiOp, ls3RsiVal) and checkRange(0, sellWindowBars, vfi, ls3VfiOp, ls3VfiVal)
+        [ls3ok, ls3bar] = cascadeSearch2(0, sellWindowBars, rsi, ls3RsiOp, ls3RsiVal, vfi, ls3VfiOp, ls3VfiVal, signalWindowLong)
+        if ls3ok
             lSellMet := true
-            lSignalBar := bar_index
+            lSignalBar := bar_index - ls3bar
             lCurSellRsn := "LS3: RSI" + ls3RsiOp + str.tostring(ls3RsiVal) + " VFI" + ls3VfiOp + str.tostring(ls3VfiVal)
     if not lSellMet and enableLS4
-        if checkRange(0, sellWindowBars, rsi, ls4RsiOp, ls4RsiVal) and checkRange(0, sellWindowBars, vfi, ls4VfiOp, ls4VfiVal)
+        [ls4ok, ls4bar] = cascadeSearch2(0, sellWindowBars, rsi, ls4RsiOp, ls4RsiVal, vfi, ls4VfiOp, ls4VfiVal, signalWindowLong)
+        if ls4ok
             lSellMet := true
-            lSignalBar := bar_index
+            lSignalBar := bar_index - ls4bar
             lCurSellRsn := "LS4: RSI" + ls4RsiOp + str.tostring(ls4RsiVal) + " VFI" + ls4VfiOp + str.tostring(ls4VfiVal)
     if not lSellMet and enableLS5
-        if checkRange(0, sellWindowBars, rsi, ls5RsiOp, ls5RsiVal)
+        ls5bar = findFirstBar(0, sellWindowBars, rsi, ls5RsiOp, ls5RsiVal)
+        if ls5bar >= 0
             lSellMet := true
-            lSignalBar := bar_index
+            lSignalBar := bar_index - ls5bar
             lCurSellRsn := "LS5: RSI" + ls5RsiOp + str.tostring(ls5RsiVal)
     if not lSellMet and enableLS6
-        if checkRange(0, sellWindowBars, rsi, ls6RsiOp, ls6RsiVal)
+        ls6bar = findFirstBar(0, sellWindowBars, rsi, ls6RsiOp, ls6RsiVal)
+        if ls6bar >= 0
             lSellMet := true
-            lSignalBar := bar_index
+            lSignalBar := bar_index - ls6bar
             lCurSellRsn := "LS6: RSI" + ls6RsiOp + str.tostring(ls6RsiVal)
     if not lSellMet and enableLS7
-        if checkRange(0, sellWindowBars, rsi, ls7RsiOp, ls7RsiVal)
+        ls7bar = findFirstBar(0, sellWindowBars, rsi, ls7RsiOp, ls7RsiVal)
+        if ls7bar >= 0
             lSellMet := true
-            lSignalBar := bar_index
+            lSignalBar := bar_index - ls7bar
             lCurSellRsn := "LS7: RSI" + ls7RsiOp + str.tostring(ls7RsiVal)
     if not lSellMet and enableLS8
-        if checkRange(0, sellWindowBars, rsi, ls8RsiOp, ls8RsiVal)
+        ls8bar = findFirstBar(0, sellWindowBars, rsi, ls8RsiOp, ls8RsiVal)
+        if ls8bar >= 0
             lSellMet := true
-            lSignalBar := bar_index
+            lSignalBar := bar_index - ls8bar
             lCurSellRsn := "LS8: RSI" + ls8RsiOp + str.tostring(ls8RsiVal)
     if not lSellMet and enableLS9
-        if checkRange(0, sellWindowBars, vfi, ls9VfiOp, ls9VfiVal)
+        ls9bar = findFirstBar(0, sellWindowBars, vfi, ls9VfiOp, ls9VfiVal)
+        if ls9bar >= 0
             lSellMet := true
-            lSignalBar := bar_index
+            lSignalBar := bar_index - ls9bar
             lCurSellRsn := "LS9: VFI" + ls9VfiOp + str.tostring(ls9VfiVal)
     if not lSellMet and enableLS10
-        if checkRange(0, sellWindowBars, vfi, ls10VfiOp, ls10VfiVal)
+        ls10bar = findFirstBar(0, sellWindowBars, vfi, ls10VfiOp, ls10VfiVal)
+        if ls10bar >= 0
             lSellMet := true
-            lSignalBar := bar_index
+            lSignalBar := bar_index - ls10bar
             lCurSellRsn := "LS10: VFI" + ls10VfiOp + str.tostring(ls10VfiVal)
     if not lSellMet and enableLS11
-        if checkRange(0, sellWindowBars, vfi, ls11VfiOp, ls11VfiVal)
+        ls11bar = findFirstBar(0, sellWindowBars, vfi, ls11VfiOp, ls11VfiVal)
+        if ls11bar >= 0
             lSellMet := true
-            lSignalBar := bar_index
+            lSignalBar := bar_index - ls11bar
             lCurSellRsn := "LS11: VFI" + ls11VfiOp + str.tostring(ls11VfiVal)
     if not lSellMet and enableLS12
-        if checkRange(0, sellWindowBars, vfi, ls12VfiOp, ls12VfiVal)
+        ls12bar = findFirstBar(0, sellWindowBars, vfi, ls12VfiOp, ls12VfiVal)
+        if ls12bar >= 0
             lSellMet := true
-            lSignalBar := bar_index
+            lSignalBar := bar_index - ls12bar
             lCurSellRsn := "LS12: VFI" + ls12VfiOp + str.tostring(ls12VfiVal)
     if not lSellMet and enableLS13
-        if checkRange(0, sellWindowBars, diPos, ls13DiOp, ls13DiVal)
+        ls13bar = findFirstBar(0, sellWindowBars, diPos, ls13DiOp, ls13DiVal)
+        if ls13bar >= 0
             lSellMet := true
-            lSignalBar := bar_index
+            lSignalBar := bar_index - ls13bar
             lCurSellRsn := "LS13a: DI+" + ls13DiOp + str.tostring(ls13DiVal)
     if not lSellMet and enableLS13b
-        if checkRange(0, sellWindowBars, diPos, ls13bDiOp, ls13bDiVal)
+        ls13bbar = findFirstBar(0, sellWindowBars, diPos, ls13bDiOp, ls13bDiVal)
+        if ls13bbar >= 0
             lSellMet := true
-            lSignalBar := bar_index
+            lSignalBar := bar_index - ls13bbar
             lCurSellRsn := "LS13b: DI+" + ls13bDiOp + str.tostring(ls13bDiVal)
     if not lSellMet and enableLS14
-        if checkRange(0, sellWindowBars, rsi, ls14RsiOp, ls14RsiVal) and checkRange(0, sellWindowBars, diPos, ls14DiOp, ls14DiVal)
+        [ls14ok, ls14bar] = cascadeSearch2(0, sellWindowBars, rsi, ls14RsiOp, ls14RsiVal, diPos, ls14DiOp, ls14DiVal, signalWindowLong)
+        if ls14ok
             lSellMet := true
-            lSignalBar := bar_index
+            lSignalBar := bar_index - ls14bar
             lCurSellRsn := "LS14a: RSI" + ls14RsiOp + str.tostring(ls14RsiVal) + " DI+" + ls14DiOp + str.tostring(ls14DiVal)
     if not lSellMet and enableLS14b
-        if checkRange(0, sellWindowBars, rsi, ls14bRsiOp, ls14bRsiVal) and checkRange(0, sellWindowBars, diPos, ls14bDiOp, ls14bDiVal)
+        [ls14bok, ls14bbar] = cascadeSearch2(0, sellWindowBars, rsi, ls14bRsiOp, ls14bRsiVal, diPos, ls14bDiOp, ls14bDiVal, signalWindowLong)
+        if ls14bok
             lSellMet := true
-            lSignalBar := bar_index
+            lSignalBar := bar_index - ls14bbar
             lCurSellRsn := "LS14b: RSI" + ls14bRsiOp + str.tostring(ls14bRsiVal) + " DI+" + ls14bDiOp + str.tostring(ls14bDiVal)
     if not lSellMet and enableLS14c
-        if checkRange(0, sellWindowBars, rsi, ls14cRsiOp, ls14cRsiVal) and checkRange(0, sellWindowBars, diPos, ls14cDiOp, ls14cDiVal)
+        [ls14cok, ls14cbar] = cascadeSearch2(0, sellWindowBars, rsi, ls14cRsiOp, ls14cRsiVal, diPos, ls14cDiOp, ls14cDiVal, signalWindowLong)
+        if ls14cok
             lSellMet := true
-            lSignalBar := bar_index
+            lSignalBar := bar_index - ls14cbar
             lCurSellRsn := "LS14c: RSI" + ls14cRsiOp + str.tostring(ls14cRsiVal) + " DI+" + ls14cDiOp + str.tostring(ls14cDiVal)
     if not lSellMet and enableLS14d
-        if checkRange(0, sellWindowBars, rsi, ls14dRsiOp, ls14dRsiVal) and checkRange(0, sellWindowBars, diPos, ls14dDiOp, ls14dDiVal)
+        [ls14dok, ls14dbar] = cascadeSearch2(0, sellWindowBars, rsi, ls14dRsiOp, ls14dRsiVal, diPos, ls14dDiOp, ls14dDiVal, signalWindowLong)
+        if ls14dok
             lSellMet := true
-            lSignalBar := bar_index
+            lSignalBar := bar_index - ls14dbar
             lCurSellRsn := "LS14d: RSI" + ls14dRsiOp + str.tostring(ls14dRsiVal) + " DI+" + ls14dDiOp + str.tostring(ls14dDiVal)
     if not lSellMet and enableLS15
-        if checkRange(0, sellWindowBars, vfi, ls15VfiOp, ls15VfiVal) and checkRange(0, sellWindowBars, diPos, ls15DiOp, ls15DiVal)
+        [ls15ok, ls15bar] = cascadeSearch2(0, sellWindowBars, vfi, ls15VfiOp, ls15VfiVal, diPos, ls15DiOp, ls15DiVal, signalWindowLong)
+        if ls15ok
             lSellMet := true
-            lSignalBar := bar_index
+            lSignalBar := bar_index - ls15bar
             lCurSellRsn := "LS15a: VFI" + ls15VfiOp + str.tostring(ls15VfiVal) + " DI+" + ls15DiOp + str.tostring(ls15DiVal)
     if not lSellMet and enableLS15b
-        if checkRange(0, sellWindowBars, vfi, ls15bVfiOp, ls15bVfiVal) and checkRange(0, sellWindowBars, diPos, ls15bDiOp, ls15bDiVal)
+        [ls15bok, ls15bbar] = cascadeSearch2(0, sellWindowBars, vfi, ls15bVfiOp, ls15bVfiVal, diPos, ls15bDiOp, ls15bDiVal, signalWindowLong)
+        if ls15bok
             lSellMet := true
-            lSignalBar := bar_index
+            lSignalBar := bar_index - ls15bbar
             lCurSellRsn := "LS15b: VFI" + ls15bVfiOp + str.tostring(ls15bVfiVal) + " DI+" + ls15bDiOp + str.tostring(ls15bDiVal)
     if not lSellMet and enableLS15c
-        if checkRange(0, sellWindowBars, vfi, ls15cVfiOp, ls15cVfiVal) and checkRange(0, sellWindowBars, diPos, ls15cDiOp, ls15cDiVal)
+        [ls15cok, ls15cbar] = cascadeSearch2(0, sellWindowBars, vfi, ls15cVfiOp, ls15cVfiVal, diPos, ls15cDiOp, ls15cDiVal, signalWindowLong)
+        if ls15cok
             lSellMet := true
-            lSignalBar := bar_index
+            lSignalBar := bar_index - ls15cbar
             lCurSellRsn := "LS15c: VFI" + ls15cVfiOp + str.tostring(ls15cVfiVal) + " DI+" + ls15cDiOp + str.tostring(ls15cDiVal)
     if not lSellMet and enableLS15d
-        if checkRange(0, sellWindowBars, vfi, ls15dVfiOp, ls15dVfiVal) and checkRange(0, sellWindowBars, diPos, ls15dDiOp, ls15dDiVal)
+        [ls15dok, ls15dbar] = cascadeSearch2(0, sellWindowBars, vfi, ls15dVfiOp, ls15dVfiVal, diPos, ls15dDiOp, ls15dDiVal, signalWindowLong)
+        if ls15dok
             lSellMet := true
-            lSignalBar := bar_index
+            lSignalBar := bar_index - ls15dbar
             lCurSellRsn := "LS15d: VFI" + ls15dVfiOp + str.tostring(ls15dVfiVal) + " DI+" + ls15dDiOp + str.tostring(ls15dDiVal)
     if not lSellMet and enableLS16
-        if checkRange(0, sellWindowBars, rsi, ls16RsiOp, ls16RsiVal) and checkRange(0, sellWindowBars, vfi, ls16VfiOp, ls16VfiVal) and checkRange(0, sellWindowBars, diPos, ls16DiOp, ls16DiVal)
+        [ls16ok, ls16bar] = cascadeSearch3(0, sellWindowBars, rsi, ls16RsiOp, ls16RsiVal, vfi, ls16VfiOp, ls16VfiVal, diPos, ls16DiOp, ls16DiVal, signalWindowLong)
+        if ls16ok
             lSellMet := true
-            lSignalBar := bar_index
+            lSignalBar := bar_index - ls16bar
             lCurSellRsn := "LS16a: RSI" + ls16RsiOp + str.tostring(ls16RsiVal) + " VFI" + ls16VfiOp + str.tostring(ls16VfiVal) + " DI+" + ls16DiOp + str.tostring(ls16DiVal)
     if not lSellMet and enableLS16b
-        if checkRange(0, sellWindowBars, rsi, ls16bRsiOp, ls16bRsiVal) and checkRange(0, sellWindowBars, vfi, ls16bVfiOp, ls16bVfiVal) and checkRange(0, sellWindowBars, diPos, ls16bDiOp, ls16bDiVal)
+        [ls16bok, ls16bbar] = cascadeSearch3(0, sellWindowBars, rsi, ls16bRsiOp, ls16bRsiVal, vfi, ls16bVfiOp, ls16bVfiVal, diPos, ls16bDiOp, ls16bDiVal, signalWindowLong)
+        if ls16bok
             lSellMet := true
-            lSignalBar := bar_index
+            lSignalBar := bar_index - ls16bbar
             lCurSellRsn := "LS16b: RSI" + ls16bRsiOp + str.tostring(ls16bRsiVal) + " VFI" + ls16bVfiOp + str.tostring(ls16bVfiVal) + " DI+" + ls16bDiOp + str.tostring(ls16bDiVal)
     if not lSellMet and enableLS16c
-        if checkRange(0, sellWindowBars, rsi, ls16cRsiOp, ls16cRsiVal) and checkRange(0, sellWindowBars, vfi, ls16cVfiOp, ls16cVfiVal) and checkRange(0, sellWindowBars, diPos, ls16cDiOp, ls16cDiVal)
+        [ls16cok, ls16cbar] = cascadeSearch3(0, sellWindowBars, rsi, ls16cRsiOp, ls16cRsiVal, vfi, ls16cVfiOp, ls16cVfiVal, diPos, ls16cDiOp, ls16cDiVal, signalWindowLong)
+        if ls16cok
             lSellMet := true
-            lSignalBar := bar_index
+            lSignalBar := bar_index - ls16cbar
             lCurSellRsn := "LS16c: RSI" + ls16cRsiOp + str.tostring(ls16cRsiVal) + " VFI" + ls16cVfiOp + str.tostring(ls16cVfiVal) + " DI+" + ls16cDiOp + str.tostring(ls16cDiVal)
     if not lSellMet and enableLS16d
-        if checkRange(0, sellWindowBars, rsi, ls16dRsiOp, ls16dRsiVal) and checkRange(0, sellWindowBars, vfi, ls16dVfiOp, ls16dVfiVal) and checkRange(0, sellWindowBars, diPos, ls16dDiOp, ls16dDiVal)
+        [ls16dok, ls16dbar] = cascadeSearch3(0, sellWindowBars, rsi, ls16dRsiOp, ls16dRsiVal, vfi, ls16dVfiOp, ls16dVfiVal, diPos, ls16dDiOp, ls16dDiVal, signalWindowLong)
+        if ls16dok
             lSellMet := true
-            lSignalBar := bar_index
+            lSignalBar := bar_index - ls16dbar
             lCurSellRsn := "LS16d: RSI" + ls16dRsiOp + str.tostring(ls16dRsiVal) + " VFI" + ls16dVfiOp + str.tostring(ls16dVfiVal) + " DI+" + ls16dDiOp + str.tostring(ls16dDiVal)
 
     if lSellMet
@@ -1403,7 +1497,8 @@ if longIsOpen and lPhase == 0 and not lStopActive and (na(lEntryBar) or bar_inde
             lHhFound  := false
             lPivotRef := ta.valuewhen(not na(ph), ph, 0)
         else
-            lTrailStop  := low[1]  // Changed from close[1] to low[1] for long trailing stop
+            barsBack = bar_index - lSignalBar + 1
+            lTrailStop  := low[barsBack]
             lStopActive := true
 
 if longIsOpen and lPhase == 2
@@ -1411,7 +1506,7 @@ if longIsOpen and lPhase == 2
     barsFromSearch = bar_index - searchStart
     
     // Use new pivot pattern detector for long exit
-    [pivotFound, pivotExpl] = pivotMultiPatternDetector(
+    [pivotFound, pivotExpl, lMaxPivotBar] = pivotMultiPatternDetector(
          usePivotLongExitA, pivotLongExitAFirst, pivotLongExitASecond,
          usePivotLongExitB, pivotLongExitBFirst, pivotLongExitBSecond,
          usePivotLongExitC, pivotLongExitCFirst, pivotLongExitCSecond,
@@ -1420,7 +1515,12 @@ if longIsOpen and lPhase == 2
     
     if pivotFound
         pivotDetectorResult := "Long Exit: " + pivotExpl
-        lTrailStop  := low[1]  // Changed from close[1] to low[1] for long trailing stop
+        if lMaxPivotBar <= lSignalBar
+            lBarsBack = bar_index - lSignalBar + 1
+            lTrailStop := low[lBarsBack]
+        else
+            lBarsBack = bar_index - lMaxPivotBar + 1
+            lTrailStop := low[lBarsBack]
         lStopActive := true
         lPhase      := 0
         lHhFound    := false
@@ -1596,7 +1696,7 @@ if sEntrySignal and not sEntryBlocked and strategy.equity > 0
     anyVariantEnabled = usePivotShortEntryA or usePivotShortEntryB or usePivotShortEntryC or usePivotShortEntryD
     if anyVariantEnabled
         searchFrom = na(sEntryBar) ? bar_index - 50 : sEntryBar  // Fallback для первого входа
-        [pivotFound, pivotExpl] = pivotMultiPatternDetector(
+        [pivotFound, pivotExpl, _sEntryMaxPivot] = pivotMultiPatternDetector(
              usePivotShortEntryA, pivotShortEntryAFirst, pivotShortEntryASecond,
              usePivotShortEntryB, pivotShortEntryBFirst, pivotShortEntryBSecond,
              usePivotShortEntryC, pivotShortEntryCFirst, pivotShortEntryCSecond,
@@ -1681,134 +1781,160 @@ sCurCloseRsn = ""
 // ← ЗАЩИТА: проверяем bar_index > sEntryBar — запрещаем закрытие в баре входа
 if shortIsOpen and sPhase == 0 and not sStopActive and (na(sEntryBar) or bar_index > sEntryBar)
     if not sCloseMet and enableSS1
-        if checkRange(0, sellWindowBars, rsi, ss1RsiOp, ss1RsiVal) and checkRange(0, sellWindowBars, vfi, ss1VfiOp, ss1VfiVal)
+        [ss1ok, ss1bar] = cascadeSearch2(0, sellWindowBars, rsi, ss1RsiOp, ss1RsiVal, vfi, ss1VfiOp, ss1VfiVal, signalWindowShort)
+        if ss1ok
             sCloseMet := true
-            sSignalBar := bar_index
+            sSignalBar := bar_index - ss1bar
             sCurCloseRsn := "SS1: RSI" + ss1RsiOp + str.tostring(ss1RsiVal) + " VFI" + ss1VfiOp + str.tostring(ss1VfiVal)
     if not sCloseMet and enableSS2
-        if checkRange(0, sellWindowBars, rsi, ss2RsiOp, ss2RsiVal) and checkRange(0, sellWindowBars, vfi, ss2VfiOp, ss2VfiVal)
+        [ss2ok, ss2bar] = cascadeSearch2(0, sellWindowBars, rsi, ss2RsiOp, ss2RsiVal, vfi, ss2VfiOp, ss2VfiVal, signalWindowShort)
+        if ss2ok
             sCloseMet := true
-            sSignalBar := bar_index
+            sSignalBar := bar_index - ss2bar
             sCurCloseRsn := "SS2: RSI" + ss2RsiOp + str.tostring(ss2RsiVal) + " VFI" + ss2VfiOp + str.tostring(ss2VfiVal)
     if not sCloseMet and enableSS3
-        if checkRange(0, sellWindowBars, rsi, ss3RsiOp, ss3RsiVal) and checkRange(0, sellWindowBars, vfi, ss3VfiOp, ss3VfiVal)
+        [ss3ok, ss3bar] = cascadeSearch2(0, sellWindowBars, rsi, ss3RsiOp, ss3RsiVal, vfi, ss3VfiOp, ss3VfiVal, signalWindowShort)
+        if ss3ok
             sCloseMet := true
-            sSignalBar := bar_index
+            sSignalBar := bar_index - ss3bar
             sCurCloseRsn := "SS3: RSI" + ss3RsiOp + str.tostring(ss3RsiVal) + " VFI" + ss3VfiOp + str.tostring(ss3VfiVal)
     if not sCloseMet and enableSS4
-        if checkRange(0, sellWindowBars, rsi, ss4RsiOp, ss4RsiVal) and checkRange(0, sellWindowBars, vfi, ss4VfiOp, ss4VfiVal)
+        [ss4ok, ss4bar] = cascadeSearch2(0, sellWindowBars, rsi, ss4RsiOp, ss4RsiVal, vfi, ss4VfiOp, ss4VfiVal, signalWindowShort)
+        if ss4ok
             sCloseMet := true
-            sSignalBar := bar_index
+            sSignalBar := bar_index - ss4bar
             sCurCloseRsn := "SS4: RSI" + ss4RsiOp + str.tostring(ss4RsiVal) + " VFI" + ss4VfiOp + str.tostring(ss4VfiVal)
     if not sCloseMet and enableSS5
-        if checkRange(0, sellWindowBars, rsi, ss5RsiOp, ss5RsiVal)
+        ss5bar = findFirstBar(0, sellWindowBars, rsi, ss5RsiOp, ss5RsiVal)
+        if ss5bar >= 0
             sCloseMet := true
-            sSignalBar := bar_index
+            sSignalBar := bar_index - ss5bar
             sCurCloseRsn := "SS5: RSI" + ss5RsiOp + str.tostring(ss5RsiVal)
     if not sCloseMet and enableSS6
-        if checkRange(0, sellWindowBars, rsi, ss6RsiOp, ss6RsiVal)
+        ss6bar = findFirstBar(0, sellWindowBars, rsi, ss6RsiOp, ss6RsiVal)
+        if ss6bar >= 0
             sCloseMet := true
-            sSignalBar := bar_index
+            sSignalBar := bar_index - ss6bar
             sCurCloseRsn := "SS6: RSI" + ss6RsiOp + str.tostring(ss6RsiVal)
     if not sCloseMet and enableSS7
-        if checkRange(0, sellWindowBars, rsi, ss7RsiOp, ss7RsiVal)
+        ss7bar = findFirstBar(0, sellWindowBars, rsi, ss7RsiOp, ss7RsiVal)
+        if ss7bar >= 0
             sCloseMet := true
-            sSignalBar := bar_index
+            sSignalBar := bar_index - ss7bar
             sCurCloseRsn := "SS7: RSI" + ss7RsiOp + str.tostring(ss7RsiVal)
     if not sCloseMet and enableSS8
-        if checkRange(0, sellWindowBars, rsi, ss8RsiOp, ss8RsiVal)
+        ss8bar = findFirstBar(0, sellWindowBars, rsi, ss8RsiOp, ss8RsiVal)
+        if ss8bar >= 0
             sCloseMet := true
-            sSignalBar := bar_index
+            sSignalBar := bar_index - ss8bar
             sCurCloseRsn := "SS8: RSI" + ss8RsiOp + str.tostring(ss8RsiVal)
     if not sCloseMet and enableSS9
-        if checkRange(0, sellWindowBars, vfi, ss9VfiOp, ss9VfiVal)
+        ss9bar = findFirstBar(0, sellWindowBars, vfi, ss9VfiOp, ss9VfiVal)
+        if ss9bar >= 0
             sCloseMet := true
-            sSignalBar := bar_index
+            sSignalBar := bar_index - ss9bar
             sCurCloseRsn := "SS9: VFI" + ss9VfiOp + str.tostring(ss9VfiVal)
     if not sCloseMet and enableSS10
-        if checkRange(0, sellWindowBars, vfi, ss10VfiOp, ss10VfiVal)
+        ss10bar = findFirstBar(0, sellWindowBars, vfi, ss10VfiOp, ss10VfiVal)
+        if ss10bar >= 0
             sCloseMet := true
-            sSignalBar := bar_index
+            sSignalBar := bar_index - ss10bar
             sCurCloseRsn := "SS10: VFI" + ss10VfiOp + str.tostring(ss10VfiVal)
     if not sCloseMet and enableSS11
-        if checkRange(0, sellWindowBars, vfi, ss11VfiOp, ss11VfiVal)
+        ss11bar = findFirstBar(0, sellWindowBars, vfi, ss11VfiOp, ss11VfiVal)
+        if ss11bar >= 0
             sCloseMet := true
-            sSignalBar := bar_index
+            sSignalBar := bar_index - ss11bar
             sCurCloseRsn := "SS11: VFI" + ss11VfiOp + str.tostring(ss11VfiVal)
     if not sCloseMet and enableSS12
-        if checkRange(0, sellWindowBars, vfi, ss12VfiOp, ss12VfiVal)
+        ss12bar = findFirstBar(0, sellWindowBars, vfi, ss12VfiOp, ss12VfiVal)
+        if ss12bar >= 0
             sCloseMet := true
-            sSignalBar := bar_index
+            sSignalBar := bar_index - ss12bar
             sCurCloseRsn := "SS12: VFI" + ss12VfiOp + str.tostring(ss12VfiVal)
     if not sCloseMet and enableSS13
-        if checkRange(0, sellWindowBars, diPos, ss13DiOp, ss13DiVal)
+        ss13bar = findFirstBar(0, sellWindowBars, diPos, ss13DiOp, ss13DiVal)
+        if ss13bar >= 0
             sCloseMet := true
-            sSignalBar := bar_index
+            sSignalBar := bar_index - ss13bar
             sCurCloseRsn := "SS13a: DI+" + ss13DiOp + str.tostring(ss13DiVal)
     if not sCloseMet and enableSS13b
-        if checkRange(0, sellWindowBars, diPos, ss13bDiOp, ss13bDiVal)
+        ss13bbar = findFirstBar(0, sellWindowBars, diPos, ss13bDiOp, ss13bDiVal)
+        if ss13bbar >= 0
             sCloseMet := true
-            sSignalBar := bar_index
+            sSignalBar := bar_index - ss13bbar
             sCurCloseRsn := "SS13b: DI+" + ss13bDiOp + str.tostring(ss13bDiVal)
     if not sCloseMet and enableSS14
-        if checkRange(0, sellWindowBars, rsi, ss14RsiOp, ss14RsiVal) and checkRange(0, sellWindowBars, diPos, ss14DiOp, ss14DiVal)
+        [ss14ok, ss14bar] = cascadeSearch2(0, sellWindowBars, rsi, ss14RsiOp, ss14RsiVal, diPos, ss14DiOp, ss14DiVal, signalWindowShort)
+        if ss14ok
             sCloseMet := true
-            sSignalBar := bar_index
+            sSignalBar := bar_index - ss14bar
             sCurCloseRsn := "SS14a: RSI" + ss14RsiOp + str.tostring(ss14RsiVal) + " DI+" + ss14DiOp + str.tostring(ss14DiVal)
     if not sCloseMet and enableSS14b
-        if checkRange(0, sellWindowBars, rsi, ss14bRsiOp, ss14bRsiVal) and checkRange(0, sellWindowBars, diPos, ss14bDiOp, ss14bDiVal)
+        [ss14bok, ss14bbar] = cascadeSearch2(0, sellWindowBars, rsi, ss14bRsiOp, ss14bRsiVal, diPos, ss14bDiOp, ss14bDiVal, signalWindowShort)
+        if ss14bok
             sCloseMet := true
-            sSignalBar := bar_index
+            sSignalBar := bar_index - ss14bbar
             sCurCloseRsn := "SS14b: RSI" + ss14bRsiOp + str.tostring(ss14bRsiVal) + " DI+" + ss14bDiOp + str.tostring(ss14bDiVal)
     if not sCloseMet and enableSS14c
-        if checkRange(0, sellWindowBars, rsi, ss14cRsiOp, ss14cRsiVal) and checkRange(0, sellWindowBars, diPos, ss14cDiOp, ss14cDiVal)
+        [ss14cok, ss14cbar] = cascadeSearch2(0, sellWindowBars, rsi, ss14cRsiOp, ss14cRsiVal, diPos, ss14cDiOp, ss14cDiVal, signalWindowShort)
+        if ss14cok
             sCloseMet := true
-            sSignalBar := bar_index
+            sSignalBar := bar_index - ss14cbar
             sCurCloseRsn := "SS14c: RSI" + ss14cRsiOp + str.tostring(ss14cRsiVal) + " DI+" + ss14cDiOp + str.tostring(ss14cDiVal)
     if not sCloseMet and enableSS14d
-        if checkRange(0, sellWindowBars, rsi, ss14dRsiOp, ss14dRsiVal) and checkRange(0, sellWindowBars, diPos, ss14dDiOp, ss14dDiVal)
+        [ss14dok, ss14dbar] = cascadeSearch2(0, sellWindowBars, rsi, ss14dRsiOp, ss14dRsiVal, diPos, ss14dDiOp, ss14dDiVal, signalWindowShort)
+        if ss14dok
             sCloseMet := true
-            sSignalBar := bar_index
+            sSignalBar := bar_index - ss14dbar
             sCurCloseRsn := "SS14d: RSI" + ss14dRsiOp + str.tostring(ss14dRsiVal) + " DI+" + ss14dDiOp + str.tostring(ss14dDiVal)
     if not sCloseMet and enableSS15
-        if checkRange(0, sellWindowBars, vfi, ss15VfiOp, ss15VfiVal) and checkRange(0, sellWindowBars, diPos, ss15DiOp, ss15DiVal)
+        [ss15ok, ss15bar] = cascadeSearch2(0, sellWindowBars, vfi, ss15VfiOp, ss15VfiVal, diPos, ss15DiOp, ss15DiVal, signalWindowShort)
+        if ss15ok
             sCloseMet := true
-            sSignalBar := bar_index
+            sSignalBar := bar_index - ss15bar
             sCurCloseRsn := "SS15a: VFI" + ss15VfiOp + str.tostring(ss15VfiVal) + " DI+" + ss15DiOp + str.tostring(ss15DiVal)
     if not sCloseMet and enableSS15b
-        if checkRange(0, sellWindowBars, vfi, ss15bVfiOp, ss15bVfiVal) and checkRange(0, sellWindowBars, diPos, ss15bDiOp, ss15bDiVal)
+        [ss15bok, ss15bbar] = cascadeSearch2(0, sellWindowBars, vfi, ss15bVfiOp, ss15bVfiVal, diPos, ss15bDiOp, ss15bDiVal, signalWindowShort)
+        if ss15bok
             sCloseMet := true
-            sSignalBar := bar_index
+            sSignalBar := bar_index - ss15bbar
             sCurCloseRsn := "SS15b: VFI" + ss15bVfiOp + str.tostring(ss15bVfiVal) + " DI+" + ss15bDiOp + str.tostring(ss15bDiVal)
     if not sCloseMet and enableSS15c
-        if checkRange(0, sellWindowBars, vfi, ss15cVfiOp, ss15cVfiVal) and checkRange(0, sellWindowBars, diPos, ss15cDiOp, ss15cDiVal)
+        [ss15cok, ss15cbar] = cascadeSearch2(0, sellWindowBars, vfi, ss15cVfiOp, ss15cVfiVal, diPos, ss15cDiOp, ss15cDiVal, signalWindowShort)
+        if ss15cok
             sCloseMet := true
-            sSignalBar := bar_index
+            sSignalBar := bar_index - ss15cbar
             sCurCloseRsn := "SS15c: VFI" + ss15cVfiOp + str.tostring(ss15cVfiVal) + " DI+" + ss15cDiOp + str.tostring(ss15cDiVal)
     if not sCloseMet and enableSS15d
-        if checkRange(0, sellWindowBars, vfi, ss15dVfiOp, ss15dVfiVal) and checkRange(0, sellWindowBars, diPos, ss15dDiOp, ss15dDiVal)
+        [ss15dok, ss15dbar] = cascadeSearch2(0, sellWindowBars, vfi, ss15dVfiOp, ss15dVfiVal, diPos, ss15dDiOp, ss15dDiVal, signalWindowShort)
+        if ss15dok
             sCloseMet := true
-            sSignalBar := bar_index
+            sSignalBar := bar_index - ss15dbar
             sCurCloseRsn := "SS15d: VFI" + ss15dVfiOp + str.tostring(ss15dVfiVal) + " DI+" + ss15dDiOp + str.tostring(ss15dDiVal)
     if not sCloseMet and enableSS16
-        if checkRange(0, sellWindowBars, rsi, ss16RsiOp, ss16RsiVal) and checkRange(0, sellWindowBars, vfi, ss16VfiOp, ss16VfiVal) and checkRange(0, sellWindowBars, diPos, ss16DiOp, ss16DiVal)
+        [ss16ok, ss16bar] = cascadeSearch3(0, sellWindowBars, rsi, ss16RsiOp, ss16RsiVal, vfi, ss16VfiOp, ss16VfiVal, diPos, ss16DiOp, ss16DiVal, signalWindowShort)
+        if ss16ok
             sCloseMet := true
-            sSignalBar := bar_index
+            sSignalBar := bar_index - ss16bar
             sCurCloseRsn := "SS16a: RSI" + ss16RsiOp + str.tostring(ss16RsiVal) + " VFI" + ss16VfiOp + str.tostring(ss16VfiVal) + " DI+" + ss16DiOp + str.tostring(ss16DiVal)
     if not sCloseMet and enableSS16b
-        if checkRange(0, sellWindowBars, rsi, ss16bRsiOp, ss16bRsiVal) and checkRange(0, sellWindowBars, vfi, ss16bVfiOp, ss16bVfiVal) and checkRange(0, sellWindowBars, diPos, ss16bDiOp, ss16bDiVal)
+        [ss16bok, ss16bbar] = cascadeSearch3(0, sellWindowBars, rsi, ss16bRsiOp, ss16bRsiVal, vfi, ss16bVfiOp, ss16bVfiVal, diPos, ss16bDiOp, ss16bDiVal, signalWindowShort)
+        if ss16bok
             sCloseMet := true
-            sSignalBar := bar_index
+            sSignalBar := bar_index - ss16bbar
             sCurCloseRsn := "SS16b: RSI" + ss16bRsiOp + str.tostring(ss16bRsiVal) + " VFI" + ss16bVfiOp + str.tostring(ss16bVfiVal) + " DI+" + ss16bDiOp + str.tostring(ss16bDiVal)
     if not sCloseMet and enableSS16c
-        if checkRange(0, sellWindowBars, rsi, ss16cRsiOp, ss16cRsiVal) and checkRange(0, sellWindowBars, vfi, ss16cVfiOp, ss16cVfiVal) and checkRange(0, sellWindowBars, diPos, ss16cDiOp, ss16cDiVal)
+        [ss16cok, ss16cbar] = cascadeSearch3(0, sellWindowBars, rsi, ss16cRsiOp, ss16cRsiVal, vfi, ss16cVfiOp, ss16cVfiVal, diPos, ss16cDiOp, ss16cDiVal, signalWindowShort)
+        if ss16cok
             sCloseMet := true
-            sSignalBar := bar_index
+            sSignalBar := bar_index - ss16cbar
             sCurCloseRsn := "SS16c: RSI" + ss16cRsiOp + str.tostring(ss16cRsiVal) + " VFI" + ss16cVfiOp + str.tostring(ss16cVfiVal) + " DI+" + ss16cDiOp + str.tostring(ss16cDiVal)
     if not sCloseMet and enableSS16d
-        if checkRange(0, sellWindowBars, rsi, ss16dRsiOp, ss16dRsiVal) and checkRange(0, sellWindowBars, vfi, ss16dVfiOp, ss16dVfiVal) and checkRange(0, sellWindowBars, diPos, ss16dDiOp, ss16dDiVal)
+        [ss16dok, ss16dbar] = cascadeSearch3(0, sellWindowBars, rsi, ss16dRsiOp, ss16dRsiVal, vfi, ss16dVfiOp, ss16dVfiVal, diPos, ss16dDiOp, ss16dDiVal, signalWindowShort)
+        if ss16dok
             sCloseMet := true
-            sSignalBar := bar_index
+            sSignalBar := bar_index - ss16dbar
             sCurCloseRsn := "SS16d: RSI" + ss16dRsiOp + str.tostring(ss16dRsiVal) + " VFI" + ss16dVfiOp + str.tostring(ss16dVfiVal) + " DI+" + ss16dDiOp + str.tostring(ss16dDiVal)
 
     if sCloseMet
@@ -1819,7 +1945,8 @@ if shortIsOpen and sPhase == 0 and not sStopActive and (na(sEntryBar) or bar_ind
             sLlFound    := false
             sPivotRefL  := ta.valuewhen(not na(pl), pl, 0)
         else
-            sTrailStop  := high[1]  // Changed from close[1] to high[1] for short trailing stop
+            sBarsBack = bar_index - sSignalBar + 1
+            sTrailStop  := high[sBarsBack]
             sStopActive := true
 
 if shortIsOpen and sPhase == 2
@@ -1827,7 +1954,7 @@ if shortIsOpen and sPhase == 2
     barsFromSearch = bar_index - searchStart
     
     // Use new pivot pattern detector for short exit
-    [pivotFound, pivotExpl] = pivotMultiPatternDetector(
+    [pivotFound, pivotExpl, sMaxPivotBar] = pivotMultiPatternDetector(
          usePivotShortExitA, pivotShortExitAFirst, pivotShortExitASecond,
          usePivotShortExitB, pivotShortExitBFirst, pivotShortExitBSecond,
          usePivotShortExitC, pivotShortExitCFirst, pivotShortExitCSecond,
@@ -1836,7 +1963,12 @@ if shortIsOpen and sPhase == 2
     
     if pivotFound
         pivotDetectorResult := "Short Exit: " + pivotExpl
-        sTrailStop  := high[1]  // Changed from close[1] to high[1] for short trailing stop
+        if sMaxPivotBar <= sSignalBar
+            sBarsBack = bar_index - sSignalBar + 1
+            sTrailStop := high[sBarsBack]
+        else
+            sBarsBack = bar_index - sMaxPivotBar + 1
+            sTrailStop := high[sBarsBack]
         sStopActive := true
         sPhase      := 0
         sLlFound    := false
